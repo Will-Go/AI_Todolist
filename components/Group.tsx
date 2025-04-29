@@ -113,6 +113,7 @@ const Group: React.FC<GroupProps> = ({
                 <Input
                   type="text"
                   value={newName}
+                  className="text-white"
                   onChange={(e) => handleEditChange(e)}
                 />
                 <div className="flex gap-2 mt-4 justify-end">

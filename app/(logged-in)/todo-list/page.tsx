@@ -2,12 +2,13 @@
 
 import { supabase } from "@/lib/supabase/client";
 import { useState, FormEvent, ChangeEvent, Suspense } from "react";
+import { Skeleton } from "@/components/ui/skeleton";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import TodoItem from "@/components/TodoItem";
 import { useAuth } from "@/context/AuthContext"; // import useAuth
 import { DndContext, closestCenter, DragEndEvent } from "@dnd-kit/core";
 import { Toaster } from "@/components/ui/sonner";
-import { useRouter, useSearchParams, usePathname } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import { toast } from "sonner";
 
 import {
@@ -41,21 +42,12 @@ function TodoListPage() {
   const [newTodo, setNewTodo] = useState("");
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editingTask, setEditingTask] = useState("");
+  const [groupName, setGroupName] = useState("");
   const queryClient = useQueryClient();
 
-  const router = useRouter();
   const searchParams = useSearchParams();
-  const pathname = usePathname();
-  // const initialGroupIdParam = searchParams.get("groupId");
-  // const initialGroupId = initialGroupIdParam
-  //   ? parseInt(initialGroupIdParam)
-  //   : null;
-  const initialGroupId = null;
-
-  const [newGroupName, setNewGroupName] = useState("");
-  const [selectedGroupId, setSelectedGroupId] = useState<number | null>(
-    initialGroupId
-  );
+  const groupId = searchParams.get("groupId");
+  const selectedGroupId = groupId ? groupId : null;
 
   // Fetch todos belonging to this user
   const { data: todos = [], isLoading: loading } = useQuery({
@@ -76,87 +68,19 @@ function TodoListPage() {
     },
   });
 
-  // Supabase-backed groups
-  const { data: groups = [], isLoading: groupsLoading } = useQuery({
-    queryKey: ["groups", user?.id],
-    enabled: !!user?.id,
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from("groups")
-        .select("id, name")
-        .eq("user_id", user?.id)
-        .order("created_at", { ascending: true });
-      if (error) throw new Error(error.message);
-      return data || [];
-    },
-  });
-
-  // Group mutations
-  const createGroupMutation = useMutation({
-    mutationFn: async (name: string) => {
-      const { data, error } = await supabase
-        .from("groups")
-        .insert({ name, user_id: user?.id })
-        .select()
-        .single();
-      if (error) throw new Error(error.message);
-      return data;
-    },
-    onSuccess: (group) => {
-      toast.success("Group created successfully");
-      queryClient.invalidateQueries({ queryKey: ["groups", user?.id] });
-      handleSelectGroup(group.id);
-      setNewGroupName("");
-    },
-  });
-
-  const deleteGroupMutation = useMutation({
-    mutationFn: async (id: number) => {
-      const { error } = await supabase
-        .from("groups")
-        .delete()
-        .eq("id", id)
-        .eq("user_id", user?.id);
-      if (error) throw new Error(error.message);
-      return id;
-    },
-    onSuccess: (id) => {
-      toast.success("Group deleted successfully");
-      queryClient.invalidateQueries({ queryKey: ["groups", user?.id] });
-      if (selectedGroupId === id) handleSelectGroup(null);
-    },
-  });
-
-  const renameGroupMutation = useMutation({
-    mutationFn: async ({ id, name }: { id: number; name: string }) => {
-      const { data, error } = await supabase
-        .from("groups")
-        .update({ name })
-        .eq("id", id)
-        .eq("user_id", user?.id)
-        .select()
-        .single();
-      if (error) throw new Error(error.message);
-      return data;
-    },
-    onSuccess: () => {
-      toast.success("Group renamed successfully");
-      queryClient.invalidateQueries({ queryKey: ["groups", user?.id] });
-    },
-  });
-
-  const handleRenameGroup = (id: number, newName: string) => {
-    if (newName?.trim())
-      renameGroupMutation.mutate({ id, name: newName.trim() });
-  };
-
   // Mutations
   const {
     mutate: addTodoMutation,
     mutateAsync: addTodoAsync,
     isPending: isAddingTodo,
   } = useMutation({
-    mutationFn: async (task: string) => {
+    mutationFn: async ({
+      task,
+      newPosition,
+    }: {
+      task: string;
+      newPosition?: number;
+    }) => {
       if (!user?.id) throw new Error("No user");
       const { data, error } = await supabase
         .from("todos")
@@ -165,7 +89,7 @@ function TodoListPage() {
             task,
             is_done: false,
             is_edited: false,
-            position: todos.length,
+            position: newPosition ? newPosition : todos.length,
             user_id: user.id,
             group_id: selectedGroupId!,
           },
@@ -176,11 +100,9 @@ function TodoListPage() {
     },
     onSuccess: () => {
       toast.success("Todo added successfully");
-      queryClient.invalidateQueries({
-        queryKey: ["todos", user?.id, selectedGroupId],
-      });
       setNewTodo("");
     },
+
     onError: (error: unknown) =>
       setErrorMsg(error instanceof Error ? error.message : String(error)),
   });
@@ -228,7 +150,10 @@ function TodoListPage() {
     e.preventDefault();
     if (!newTodo.trim()) return;
     setErrorMsg("");
-    addTodoMutation(newTodo);
+    addTodoMutation({ task: newTodo });
+    queryClient.invalidateQueries({
+      queryKey: ["todos", user?.id, selectedGroupId],
+    });
   };
 
   const toggleDone = (todo: Todo) => {
@@ -337,22 +262,8 @@ function TodoListPage() {
     });
   };
 
-  const handleSelectGroup = (id: number | null) => {
-    setSelectedGroupId(id);
-    const params = new URLSearchParams(searchParams.toString());
-    if (id !== null) params.set("groupId", id.toString());
-    else params.delete("groupId");
-    router.push(`${pathname}?${params.toString()}`);
-  };
-
-  const handleAddGroup = (e: FormEvent) => {
-    e.preventDefault();
-    if (!newGroupName.trim()) return;
-    createGroupMutation.mutate(newGroupName.trim());
-  };
-
   const handleAIresponse = async (message: string) => {
-    const context = `Group: ${selectedGroupId}, Todos: ${todos
+    const context = `Group_name: ${groupName}, Todos: ${todos
       ?.map((t) => t.task)
       .join(", ")}`;
     const res = await fetch(`/api/task-generator`, {
@@ -365,7 +276,6 @@ function TodoListPage() {
     const data = await res.json();
 
     const geminiResponse = data.message as string;
-    console.log("geminiResponse", geminiResponse);
 
     if (!geminiResponse || geminiResponse.trim() === "NO VALID TOPIC") {
       toast.error("Invalid topic");
@@ -375,25 +285,49 @@ function TodoListPage() {
     const tasks = geminiResponse
       .split(",")
       .map((task) => firstletterCap(task.trim()));
-    for (const task of tasks) {
-      await addTodoAsync(task);
+    const newPosition = todos.length;
+
+    // Optimistic update: add todos to cache
+    const prevTodos =
+      queryClient.getQueryData(["todos", user?.id, selectedGroupId]) || [];
+    const optimisticTodos = tasks.map((task, i) => ({
+      id: `optimistic-${Date.now()}-${i}`,
+      task,
+      is_done: false,
+      is_edited: false,
+      position: newPosition + i,
+      user_id: user?.id,
+      group_id: selectedGroupId,
+      created_at: new Date().toISOString(),
+      modified_at: null,
+      done_at: null,
+    }));
+    queryClient.setQueryData(
+      ["todos", user?.id, selectedGroupId],
+      [...todos, ...optimisticTodos]
+    );
+
+    try {
+      for (const [i, task] of tasks.entries()) {
+        await addTodoAsync({ task, newPosition: newPosition + i });
+      }
+    } catch {
+      // Rollback on error
+      queryClient.setQueryData(["todos", user?.id, selectedGroupId], prevTodos);
+      toast.error("Failed to add todos. Please try again.");
+      return;
     }
+    // Refetch from server
+    queryClient.invalidateQueries({
+      queryKey: ["todos", user?.id, selectedGroupId],
+    });
   };
 
+  // groupName can be calculated from Groups component if needed
   return (
     <main className="flex-1 flex p-6 space-x-6">
       <Toaster position="top-right" duration={5000} />
-      <Groups
-        groups={groups}
-        selectedGroupId={selectedGroupId}
-        setSelectedGroupId={handleSelectGroup}
-        newGroupName={newGroupName}
-        setNewGroupName={setNewGroupName}
-        handleAddGroup={handleAddGroup}
-        onUpdateGroup={handleRenameGroup}
-        onDeleteGroup={(id) => deleteGroupMutation.mutate(id)}
-        groupsLoading={groupsLoading}
-      />
+      <Groups onGroupNameChange={setGroupName} />
       {/* Main content */}
       <section className="flex flex-col flex-1  mx-12">
         {!selectedGroupId ? (
@@ -403,7 +337,7 @@ function TodoListPage() {
         ) : (
           <div className="flex flex-col flex-1">
             <h1 className="text-3xl font-bold text-zinc-100 mb-6">
-              {groups.find((g) => g.id === selectedGroupId)?.name} Todos
+              {groupName} Todos
             </h1>
             {errorMsg && (
               <div className="mb-4">
@@ -445,7 +379,25 @@ function TodoListPage() {
                 strategy={verticalListSortingStrategy}
               >
                 <ul className="flex-1 space-y-2 overflow-y-auto scrollbar-thin scrollbar-thumb-zinc-600">
-                  {loading && <li className="text-zinc-400">Loading...</li>}
+                  {loading && (
+                    <>
+                      {Array.from({ length: 5 }).map((_, i) => (
+                        <li
+                          key={"skeleton-" + i}
+                          className="flex items-center justify-between gap-4 bg-zinc-800 border animate-fade-in border-zinc-600 shadow-sm mb-3 p-4 rounded-lg transition-colors duration-300 ease-in-out  hover:bg-zinc-700"
+                        >
+                          <Skeleton
+                            style={{ transitionDelay: `${i * 100}ms` }}
+                            className="w-5 h-5 rounded-full"
+                          />
+                          <Skeleton
+                            style={{ transitionDelay: `${i * 100}ms` }}
+                            className="flex-1 h-4"
+                          />
+                        </li>
+                      ))}
+                    </>
+                  )}
                   {!loading && todos.length === 0 && (
                     <li className="text-zinc-500 text-center">
                       No todos in this group!

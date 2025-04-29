@@ -3,7 +3,6 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
-  DialogDescription,
   DialogClose,
 } from "@/components/ui/dialog";
 import { X } from "lucide-react";
@@ -36,7 +35,7 @@ export default function Dialog({
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
         </DialogHeader>
-        <DialogDescription>{children}</DialogDescription>
+        {children}
       </DialogContent>
     </ShadDialog>
   );

@@ -30,7 +30,7 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body
-        className={`${geistSans.variable} ${geistMono.variable} antialiased bg-zinc-900`}
+        className={`${geistSans.variable} ${geistMono.variable} antialiased bg-zinc-900 selection:bg-zinc-400 selection:text-zinc-900`}
       >
         <AuthProvider>
           <ReactQueryProvider>{children}</ReactQueryProvider>

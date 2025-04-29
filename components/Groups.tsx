@@ -1,9 +1,15 @@
 "use client";
 
 import React, { FormEvent, useState } from "react";
-import { ChevronLeft, ChevronRight, Plus, Loader2 } from "lucide-react";
-
+import { ChevronLeft, ChevronRight, Plus } from "lucide-react";
+import { Skeleton } from "@/components/ui/skeleton";
+import { supabase } from "@/lib/supabase/client";
+import { useAuth } from "@/context/AuthContext";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
 import Group from "./Group";
+
+import useQueryParams from "@/lib/hooks/useQueryParams";
 
 export interface Group {
   id: number;
@@ -11,33 +17,122 @@ export interface Group {
 }
 
 interface GroupsProps {
-  groups: Group[];
-  selectedGroupId: number | null;
-  setSelectedGroupId: (id: number | null) => void;
-  newGroupName: string;
-  setNewGroupName: (val: string) => void;
-  handleAddGroup: (e: FormEvent) => void;
-  onUpdateGroup: (id: number, newName: string) => void;
-  onDeleteGroup: (id: number) => void;
-  groupsLoading: boolean;
+  onGroupNameChange: (name: string) => void;
 }
 
-export default function Groups({
-  groups,
-  selectedGroupId,
-  setSelectedGroupId,
-  newGroupName,
-  setNewGroupName,
-  handleAddGroup,
-  onUpdateGroup,
-  onDeleteGroup,
-  groupsLoading,
-}: GroupsProps) {
+export default function Groups({ onGroupNameChange }: GroupsProps) {
+  const { user, loading: userLoading } = useAuth();
+  const {
+    queryParams: { groupId },
+    addQueries,
+    deleteQueries,
+  } = useQueryParams(["groupId"]);
+  const queryClient = useQueryClient();
   const [collapsed, setCollapsed] = useState(false);
+  const [newGroupName, setNewGroupName] = useState("");
+
+  // Fetch groups
+  const { data: groups = [], isLoading: groupsLoading } = useQuery({
+    queryKey: ["groups", user?.id],
+    enabled: !!user?.id,
+
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("groups")
+        .select("id, name")
+        .eq("user_id", user?.id)
+        .order("created_at", { ascending: true });
+      if (error) throw new Error(error.message);
+      return data || [];
+    },
+  });
+
+  // Create group
+  const createGroupMutation = useMutation({
+    mutationFn: async (name: string) => {
+      const { data, error } = await supabase
+        .from("groups")
+        .insert({ name, user_id: user?.id })
+        .select()
+        .single();
+      if (error) throw new Error(error.message);
+      return data;
+    },
+    onSuccess: (group) => {
+      toast.success("Group created successfully");
+      queryClient.invalidateQueries({ queryKey: ["groups", user?.id] });
+      addQueries({ groupId: group.id.toString() });
+      setNewGroupName("");
+    },
+  });
+
+  // Delete group
+  const deleteGroupMutation = useMutation({
+    mutationFn: async (id: number) => {
+      const { error } = await supabase
+        .from("groups")
+        .delete()
+        .eq("id", id)
+        .eq("user_id", user?.id);
+      if (error) throw new Error(error.message);
+      return id;
+    },
+    onSuccess: (id) => {
+      toast.success("Group deleted successfully");
+      queryClient.invalidateQueries({ queryKey: ["groups", user?.id] });
+      if (groupId === id.toString()) deleteQueries("groupId");
+    },
+  });
+
+  // Rename group
+  const renameGroupMutation = useMutation({
+    mutationFn: async ({ id, name }: { id: number; name: string }) => {
+      const { data, error } = await supabase
+        .from("groups")
+        .update({ name })
+        .eq("id", id)
+        .eq("user_id", user?.id)
+        .select()
+        .single();
+      if (error) throw new Error(error.message);
+      return data;
+    },
+    onSuccess: () => {
+      toast.success("Group renamed successfully");
+      queryClient.invalidateQueries({ queryKey: ["groups", user?.id] });
+    },
+  });
+
+  // Handlers
+  const handleAddGroup = (e: FormEvent) => {
+    e.preventDefault();
+    if (!newGroupName.trim()) return;
+    createGroupMutation.mutate(newGroupName.trim());
+  };
+
+  const handleRenameGroup = (id: number, newName: string) => {
+    if (newName?.trim())
+      renameGroupMutation.mutate({ id, name: newName.trim() });
+  };
+
+  const handleDeleteGroup = (id: number) => {
+    deleteGroupMutation.mutate(id);
+  };
+
+  const handleSelectGroup = (g: Group) => {
+    if (groupId !== g.id.toString()) {
+      onGroupNameChange(g.name);
+      addQueries({ groupId: g.id.toString() });
+    } else {
+      deleteQueries("groupId");
+    }
+  };
+
+  // (removed duplicate collapsed/setCollapsed)
 
   return (
     <aside
-      className={`transition-all duration-300 bg-zinc-800/80 border border-zinc-700 rounded-2xl p-4 shadow-lg flex flex-col h-full overflow-y-auto overflow-x-hidden ${
+      className={`sticky top-4 self-start transition-all duration-300 bg-zinc-800/80 border border-zinc-700 rounded-2xl p-4 shadow-lg flex flex-col h-full overflow-y-auto overflow-x-hidden ${
         collapsed
           ? "w-16 min-w-[4rem] max-w-16 p-2!"
           : "w-64 min-w-[16rem] max-w-64"
@@ -85,24 +180,26 @@ export default function Groups({
           collapsed ? "pt-4" : ""
         }`}
       >
-        {groupsLoading ? (
-          <div className="flex items-center justify-center h- py-6">
-            <Loader2
-              className="inline-block w-8 h-8 text-white rounded-full animate-spin"
-              aria-label="Loading groups"
-            />
+        {groupsLoading || userLoading ? (
+          <div className="flex flex-col gap-2 py-4">
+            {[...Array(5)].map((_, i) => (
+              <Skeleton
+                key={i}
+                className="h-10 w-full rounded-xl bg-zinc-700/70"
+              />
+            ))}
           </div>
         ) : (
-          groups.map((g) => (
+          groups.map((g: Group) => (
             <Group
               key={g.id}
               id={g.id}
               name={g.name}
-              selected={selectedGroupId === g.id}
+              selected={groupId === g.id.toString()}
               collapsed={collapsed}
-              onSelect={setSelectedGroupId}
-              onEdit={onUpdateGroup}
-              onDelete={onDeleteGroup}
+              onSelect={() => handleSelectGroup(g)}
+              onEdit={handleRenameGroup}
+              onDelete={handleDeleteGroup}
             />
           ))
         )}
